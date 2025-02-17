@@ -35,7 +35,15 @@ contract Raffle is VRFConsumerBaseV2Plus {
     /* Errors */
     error Raffle__SendMoreToEnterRaffel();
     error Raffle__TransferFailed();
+    error Raffle__NotOpen();
 
+    /* Type Declarations */
+    enum RaffleState {
+        OPEN,
+        CALCULATING
+    }
+
+    /* State Variables */
     uint16 private constant REQUEST_CONFIRMATIONS = 3;
     uint32 private constant NUM_WORDS = 1;
     uint256 private immutable i_entrancePrice;
@@ -47,9 +55,11 @@ contract Raffle is VRFConsumerBaseV2Plus {
     uint256 private s_lastTimeStampe;
     address payable[] public s_players;
     address private s_recentWinner;
+    RaffleState private s_raffleState;
 
     /* Events */
     event RaffleEnterd(address indexed player);
+    event winnerPicked(address indexed winner);
 
     constructor(
         uint256 entrancePrice,
@@ -61,10 +71,12 @@ contract Raffle is VRFConsumerBaseV2Plus {
     ) VRFConsumerBaseV2Plus(vrfCoordinator) {
         i_entrancePrice = entrancePrice;
         i_interval = interval;
-        s_lastTimeStampe = block.timestamp;
         i_keyHash = gasLane;
         i_subscriptionId = subscriptionId;
         i_callbackGasLimit = callbackGasLimit;
+
+        s_lastTimeStampe = block.timestamp;
+        s_raffleState = RaffleState.OPEN; // also equal to: RaflleState(0)
     }
 
     /**
@@ -78,6 +90,9 @@ contract Raffle is VRFConsumerBaseV2Plus {
         if (msg.value < i_entrancePrice) {
             revert Raffle__SendMoreToEnterRaffel();
         }
+        if (s_raffleState == RaffleState.CALCULATING) {
+            revert Raffle__NotOpen();
+        }
         s_players.push(payable(msg.sender));
         emit RaffleEnterd(msg.sender);
     }
@@ -86,6 +101,7 @@ contract Raffle is VRFConsumerBaseV2Plus {
         if ((block.timestamp - s_lastTimeStampe) < i_interval) {
             revert();
         }
+        s_raffleState = RaffleState.CALCULATING;
         VRFV2PlusClient.RandomWordsRequest memory request = VRFV2PlusClient
             .RandomWordsRequest({
                 keyHash: i_keyHash,
@@ -108,6 +124,12 @@ contract Raffle is VRFConsumerBaseV2Plus {
         uint256 indexOfWinner = randomWords[0] % s_players.length;
         address payable recentWinner = s_players[indexOfWinner];
         s_recentWinner = recentWinner;
+
+        s_raffleState = RaffleState.OPEN;
+        s_players = new address payable[](0);
+        s_lastTimeStampe = block.timestamp;
+        emit winnerPicked(s_recentWinner);
+
         (bool success, ) = recentWinner.call{value: address(this).balance}("");
         if (!success) {
             revert Raffle__TransferFailed();
